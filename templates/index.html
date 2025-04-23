@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Easy Wireshark</title>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Using Tailwind CSS via CDN for development only -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .packet-entry {
@@ -12,6 +13,19 @@
         }
         .packet-entry:hover {
             background-color: #f3f4f6;
+        }
+        .status-message {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+        }
+        .status-success {
+            background-color: #d1fae5;
+            color: #065f46;
+        }
+        .status-error {
+            background-color: #fee2e2;
+            color: #991b1b;
         }
     </style>
 </head>
@@ -51,6 +65,7 @@
         
         <div class="bg-white rounded-lg shadow-md p-6">
             <h2 class="text-xl font-semibold mb-4">Captured Packets</h2>
+            <div id="statusMessage" class="status-message hidden"></div>
             <div id="packetList" class="space-y-2">
                 <!-- Packets will be displayed here -->
             </div>
@@ -62,9 +77,37 @@
         const startButton = document.getElementById('startCapture');
         const stopButton = document.getElementById('stopCapture');
         const packetList = document.getElementById('packetList');
+        const statusMessage = document.getElementById('statusMessage');
+        
+        function showStatus(message, isError = false) {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message ${isError ? 'status-error' : 'status-success'}`;
+            statusMessage.classList.remove('hidden');
+        }
+        
+        function hideStatus() {
+            statusMessage.classList.add('hidden');
+        }
+        
+        // Add connection status logging
+        socket.on('connect', () => {
+            console.log('WebSocket connected');
+            showStatus('Connected to server', false);
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('WebSocket disconnected');
+            showStatus('Disconnected from server', true);
+        });
+        
+        socket.on('connect_error', (error) => {
+            console.error('WebSocket connection error:', error);
+            showStatus('Connection error: ' + error, true);
+        });
         
         startButton.addEventListener('click', () => {
             const request = document.getElementById('request').value;
+            console.log('Starting capture with request:', request);
             
             fetch('/start_capture', {
                 method: 'POST',
@@ -72,6 +115,23 @@
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ request }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Capture response:', data);
+                if (data.status === 'error') {
+                    showStatus('Error: ' + data.message, true);
+                    startButton.disabled = false;
+                    stopButton.disabled = true;
+                } else {
+                    showStatus(data.message, false);
+                }
+            })
+            .catch(error => {
+                console.error('Error starting capture:', error);
+                showStatus('Error starting capture: ' + error, true);
+                startButton.disabled = false;
+                stopButton.disabled = true;
             });
             
             startButton.disabled = true;
@@ -82,6 +142,10 @@
         stopButton.addEventListener('click', () => {
             fetch('/stop_capture', {
                 method: 'POST',
+            })
+            .then(response => response.json())
+            .then(data => {
+                showStatus('Capture stopped', false);
             });
             
             startButton.disabled = false;
@@ -89,34 +153,74 @@
         });
         
         socket.on('packet', (packet) => {
-            const layers = packet._source.layers;
-            const frame = layers.frame || {};
-            const ip = layers.ip || {};
-            
-            const packetElement = document.createElement('div');
-            packetElement.className = 'packet-entry p-4 border rounded-lg';
-            packetElement.innerHTML = `
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                        <span class="font-semibold">Time:</span>
-                        <span>${frame['frame.time'] || 'N/A'}</span>
+            console.log('Received packet:', packet);
+            try {
+                // Get the packet source information
+                const source = packet._source;
+                const layers = source.layers;
+                
+                // Extract key information
+                const frame = layers.frame || {};
+                const ipv6 = layers.ipv6 || {};
+                const icmpv6 = layers.icmpv6 || {};
+                
+                // Extract information directly from known structure
+                const time = frame["frame.time"] || "N/A";
+                const protocol = frame["frame.protocols"] || "N/A";
+                const srcAddr = ipv6.src || ipv6["ipv6.src"] || ipv6["ipv6.src_host"] || "N/A";
+                const dstAddr = ipv6.dst || ipv6["ipv6.dst"] || ipv6["ipv6.dst_host"] || "N/A";
+                
+                // Extract ICMP type
+                let icmpType = "Unknown";
+                if (icmpv6 && icmpv6.type) {
+                    icmpType = icmpv6.type;
+                } else if (icmpv6 && icmpv6["icmpv6.type"]) {
+                    icmpType = icmpv6["icmpv6.type"];
+                }
+                
+                // Map ICMP type to readable name
+                let icmpTypeName = "Type " + icmpType;
+                if (icmpType === "128") icmpTypeName = "Echo Request (Ping)";
+                else if (icmpType === "129") icmpTypeName = "Echo Reply";
+                else if (icmpType === "133") icmpTypeName = "Router Solicitation";
+                else if (icmpType === "134") icmpTypeName = "Router Advertisement";
+                else if (icmpType === "135") icmpTypeName = "Neighbor Solicitation";
+                else if (icmpType === "136") icmpTypeName = "Neighbor Advertisement";
+                
+                // Create packet display element
+                const packetElement = document.createElement('div');
+                packetElement.className = 'packet-entry p-4 border rounded-lg';
+                packetElement.innerHTML = `
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <span class="font-semibold">Time:</span>
+                            <span>${time}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Protocol:</span>
+                            <span>${protocol}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Source:</span>
+                            <span>${srcAddr}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Destination:</span>
+                            <span>${dstAddr}</span>
+                        </div>
                     </div>
-                    <div>
-                        <span class="font-semibold">Protocol:</span>
-                        <span>${frame['frame.protocols'] || 'N/A'}</span>
+                    <div class="mt-2">
+                        <span class="font-semibold">ICMP:</span>
+                        <span>${icmpTypeName}</span>
                     </div>
-                    <div>
-                        <span class="font-semibold">Source:</span>
-                        <span>${ip['ip.src'] || 'N/A'}</span>
-                    </div>
-                    <div>
-                        <span class="font-semibold">Destination:</span>
-                        <span>${ip['ip.dst'] || 'N/A'}</span>
-                    </div>
-                </div>
-            `;
-            
-            packetList.insertBefore(packetElement, packetList.firstChild);
+                `;
+                
+                packetList.insertBefore(packetElement, packetList.firstChild);
+                console.log('Added packet to display');
+            } catch (error) {
+                console.error('Error processing packet:', error);
+                console.error('Problematic packet:', packet);
+            }
         });
     </script>
 </body>
