@@ -4,11 +4,6 @@ __pycache__/
 *.pyo
 *.pyd
 *.pyw
-.cursorrules
-.cursorconfig
-.cursorrules
-.cursorconfig
-.cursorignore
 .env
 .env.local
 .env.development.local
